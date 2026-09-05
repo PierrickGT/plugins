@@ -4,6 +4,17 @@ name: Sync upstream
 # manifests so `just update-claude-plugins` in the dotfiles repo picks up new
 # pstack releases automatically.
 #
+# Every commit is created through the GitHub API rather than pushed from the
+# runner, so GitHub signs it with its own key and the branch stays fully
+# verified. A runner has no GPG key, so a `git push` here would leave unsigned
+# commits in an otherwise signed history.
+#
+#   merge        -> POST /merges          (signed merge commit)
+#   manifests    -> PUT /contents/{path}  (signed single-parent commit per file)
+#
+# The Git Data API is deliberately not used: commits created that way are not
+# signed by GitHub.
+#
 # A conflict fails the run rather than guessing: the only files this fork owns
 # are .claude-plugin/, */.claude-plugin/, .claude-sync/ and this workflow, so a
 # conflict means upstream started shipping one of those paths and the fork needs
@@ -21,6 +32,10 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  UPSTREAM: cursor/plugins
+  BRANCH: main
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -28,34 +43,78 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 0
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Merge upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git remote add upstream https://github.com/cursor/plugins.git
-          git fetch upstream main
-          if ! git merge --no-edit upstream/main; then
-            git merge --abort
-            echo "::error::Merge conflict with cursor/plugins. Resolve manually." >&2
-            exit 1
-          fi
+          set -euo pipefail
+
+          upstream_sha=$(gh api "repos/$UPSTREAM/commits/$BRANCH" --jq .sha)
+          echo "upstream $UPSTREAM@$BRANCH is $upstream_sha"
+
+          set +e
+          response=$(gh api -X POST "repos/${{ github.repository }}/merges" \
+            -f base="$BRANCH" \
+            -f head="$upstream_sha" \
+            -f commit_message="chore: merge $UPSTREAM@${upstream_sha:0:7} into $BRANCH" \
+            --include --silent 2>&1)
+          set -e
+          status=$(printf '%s\n' "$response" | awk 'NR==1 {print $2; exit}')
+
+          case "$status" in
+            201) echo "merged upstream into $BRANCH" ;;
+            204) echo "already up to date with upstream" ;;
+            *)
+              echo "$response" >&2
+              echo "::error::Could not merge $UPSTREAM into $BRANCH (HTTP ${status:-unknown}). Resolve manually." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Regenerate Claude manifests
-        run: ./.claude-sync/gen-manifests.sh
-
-      - name: Push
         run: |
-          if git diff --quiet HEAD -- && git diff --quiet "@{u}" HEAD; then
-            echo "Already up to date."
+          set -euo pipefail
+          git fetch origin "$BRANCH"
+          git checkout --force -B "$BRANCH" "origin/$BRANCH"
+          ./.claude-sync/gen-manifests.sh
+
+      - name: Commit manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          changed=$(git status --porcelain -- '*.json' | awk '{print $2}')
+          if [[ -z "$changed" ]]; then
+            echo "manifests already current"
             exit 0
           fi
-          if ! git diff --quiet HEAD --; then
-            git add -A
-            git commit -m "chore: regenerate Claude manifests after upstream sync"
-          fi
-          git push origin main
+
+          version=$(jq -r .version pstack/.claude-plugin/plugin.json)
+
+          while IFS= read -r path; do
+            echo "committing $path"
+
+            # The blob sha is an update precondition. A manifest for a newly
+            # published plugin has no blob yet, so the field is left out.
+            blob_args=()
+            if blob=$(git rev-parse --quiet --verify "HEAD:$path" 2>/dev/null); then
+              blob_args=(-f "sha=$blob")
+            fi
+
+            gh api -X PUT "repos/${{ github.repository }}/contents/$path" \
+              -f message="chore: regenerate $(basename "$path") for pstack $version" \
+              -f branch="$BRANCH" \
+              "${blob_args[@]}" \
+              -f content="$(base64 -w0 "$path")" \
+              --jq '.commit.sha'
+          done <<<"$changed"
+
+      - name: Verify signatures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/commits?sha=$BRANCH&per_page=5" \
+            --jq '.[] | "\(.sha[0:7]) verified=\(.commit.verification.verified) \(.commit.message | split("\n")[0])"'
