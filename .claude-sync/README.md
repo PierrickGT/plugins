@@ -12,7 +12,7 @@ content is byte-for-byte upstream.
 | `.claude-sync/gen-manifests.sh` | Derives the Claude manifests from the Cursor ones |
 | `.claude-plugin/marketplace.json` | Generated. Marketplace Claude Code installs from |
 | `pstack/.claude-plugin/plugin.json` | Generated. Per-plugin manifest |
-| `.github/workflows/sync-upstream.yml` | Weekly `git merge upstream/main` + regenerate |
+| `.github/workflows/sync-upstream.yml` | Weekly upstream merge + regenerate |
 
 Everything else is upstream and must stay untouched, so merges never conflict.
 
@@ -29,6 +29,15 @@ Then `just update-claude-plugins`.
 ## Publishing another plugin from this repo
 
 Add its directory name to `PLUGINS` in `.claude-sync/gen-manifests.sh`, run the script, commit.
+
+## Commit signing
+
+Every commit on `main` is signed. Human commits use the maintainer's GPG key over SSH; the
+weekly sync creates its commits through the GitHub API — the Merges API for the upstream merge,
+the Contents API for regenerated manifests — so GitHub signs them with its own key. A runner has
+no GPG key, so a plain `git push` from CI would leave unsigned commits in a signed history.
+
+The Git Data API is not used anywhere here: commits created that way are unsigned.
 
 ## Upstream drift
 
