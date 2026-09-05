@@ -1,0 +1,61 @@
+name: Sync upstream
+
+# Keeps this fork level with cursor/plugins and regenerates the Claude Code
+# manifests so `just update-claude-plugins` in the dotfiles repo picks up new
+# pstack releases automatically.
+#
+# A conflict fails the run rather than guessing: the only files this fork owns
+# are .claude-plugin/, */.claude-plugin/, .claude-sync/ and this workflow, so a
+# conflict means upstream started shipping one of those paths and the fork needs
+# a human decision.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge upstream
+        run: |
+          git remote add upstream https://github.com/cursor/plugins.git
+          git fetch upstream main
+          if ! git merge --no-edit upstream/main; then
+            git merge --abort
+            echo "::error::Merge conflict with cursor/plugins. Resolve manually." >&2
+            exit 1
+          fi
+
+      - name: Regenerate Claude manifests
+        run: ./.claude-sync/gen-manifests.sh
+
+      - name: Push
+        run: |
+          if git diff --quiet HEAD -- && git diff --quiet "@{u}" HEAD; then
+            echo "Already up to date."
+            exit 0
+          fi
+          if ! git diff --quiet HEAD --; then
+            git add -A
+            git commit -m "chore: regenerate Claude manifests after upstream sync"
+          fi
+          git push origin main
