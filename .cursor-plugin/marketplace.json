@@ -141,7 +141,7 @@
     {
       "name": "x",
       "source": "third_party/x",
-      "description": "Search posts, read timelines, pull trends, and manage bookmarks."
+      "description": "Search posts, read timelines, pull trends, manage bookmarks, and access X Chat."
     },
     {
       "name": "clay",
@@ -334,6 +334,11 @@
       "description": "Browse, search, and read Microsoft OneDrive files."
     },
     {
+      "name": "sharepoint",
+      "source": "third_party/sharepoint",
+      "description": "Search and read Microsoft SharePoint sites, document libraries, files, and lists."
+    },
+    {
       "name": "teams",
       "source": "third_party/teams",
       "description": "Search, read, and send Microsoft Teams chats and channel messages."
@@ -402,6 +407,11 @@
       "name": "google-cloud-bigquery",
       "source": "third_party/google-cloud-bigquery",
       "description": "Explore datasets and tables and run SQL queries."
+    },
+    {
+      "name": "statsig",
+      "source": "third_party/statsig",
+      "description": "Inspect and manage feature gates, experiments, dynamic configs, and metrics."
     }
   ]
 }
